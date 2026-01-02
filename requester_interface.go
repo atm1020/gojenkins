@@ -17,6 +17,7 @@ package gojenkins
 import (
 	"context"
 	"io"
+	"os"
 	"net/http"
 )
 
@@ -30,6 +31,7 @@ type JenkinsRequester interface {
 	PostFiles(ctx context.Context, endpoint string, payload io.Reader, response interface{}, query map[string]string, files []string) (*http.Response, error)
 	Get(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
 	GetXML(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
+	SaveToFile(ctx context.Context, endpoint string, filepath string, querystring map[string]string) (*os.File, *http.Response, error)
 }
 
 // Ensure Requester implements JenkinsRequester

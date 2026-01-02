@@ -21,9 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
 	"strconv"
 	"strings"
+
+	"golang.org/x/net/html"
 )
 
 // Job represents a Jenkins job and provides methods to interact with it.
@@ -622,4 +625,72 @@ func (pr *PipelineRun) AbortInput(ctx context.Context) (bool, error) {
 		return false, errors.New(strconv.Itoa(resp.StatusCode))
 	}
 	return true, nil
+}
+
+func (pr *PipelineRun) SaveTextLog(ctx context.Context, path string) (*os.File, error) {
+	href := pr.Base + "/consoleText"
+	file, _, err := pr.Job.Jenkins.Requester.SaveToFile(ctx, href, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	return file, nil
+}
+
+func (pr *PipelineRun) Replay(ctx context.Context, params map[string]string) (bool, error) {
+	data := url.Values{}
+	data.Set("json", makeJson(params))
+	data.Set("Submit", "Run")
+
+	href := pr.Base + "/replay/run"
+
+	resp, err := pr.Job.Jenkins.Requester.Post(ctx, href, bytes.NewBufferString(data.Encode()), nil, nil)
+	if err != nil {
+		return false, err
+	}
+	if resp.StatusCode != 200 && resp.StatusCode != 201 {
+		return false, errors.New(strconv.Itoa(resp.StatusCode))
+	}
+	return true, nil
+}
+
+func (pr *PipelineRun) GetReplayScript(ctx context.Context) (string, error) {
+	var result string
+	href := pr.Base + "/replay/"
+	_, err := pr.Job.Jenkins.Requester.Get(ctx, href, &result, nil)
+	if err != nil {
+		return "", err
+	}
+
+	doc, err := html.Parse(strings.NewReader(result))
+	if err != nil {
+		return "", fmt.Errorf("failed to parse HTML: %w", err)
+	}
+
+	var f func(*html.Node)
+	f = func(n *html.Node) {
+		if n.Type == html.ElementNode {
+			if n.Data == "textarea" {
+				if n.FirstChild != nil {
+					result = n.FirstChild.Data
+				}
+			}
+		}
+		for c := n.FirstChild; c != nil; c = c.NextSibling {
+			f(c)
+		}
+	}
+	f(doc)
+
+	return result, nil
+}
+
+// GetNodeLog retrieves the console log output for a specific pipeline node by its ID.
+func (pr *PipelineRun) GetNodeLog(ctx context.Context, nodeId string) (*PipelineNodeLog, error) {
+	log := new(PipelineNodeLog)
+	href := pr.Base + "/execution/node/" + nodeId + "/wfapi/log"
+	_, err := pr.Job.Jenkins.Requester.GetJSON(ctx, href, log, nil)
+	if err != nil {
+		return nil, err
+	}
+	return log, nil
 }
