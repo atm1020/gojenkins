@@ -29,9 +29,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
-// APIRequest represents an HTTP request to the Jenkins API.
+// Request Methods
+
 type APIRequest struct {
 	Method   string
 	Endpoint string
@@ -40,13 +42,11 @@ type APIRequest struct {
 	Suffix   string
 }
 
-// SetHeader sets a header on the API request.
 func (ar *APIRequest) SetHeader(key string, value string) *APIRequest {
 	ar.Headers.Set(key, value)
 	return ar
 }
 
-// NewAPIRequest creates a new API request with the specified method, endpoint, and payload.
 func NewAPIRequest(method string, endpoint string, payload io.Reader) *APIRequest {
 	var headers = http.Header{}
 	var suffix string
@@ -54,16 +54,15 @@ func NewAPIRequest(method string, endpoint string, payload io.Reader) *APIReques
 	return ar
 }
 
-// Requester handles HTTP requests to the Jenkins API.
 type Requester struct {
 	Base      string
 	BasicAuth *BasicAuth
 	Client    *http.Client
 	CACert    []byte
 	SslVerify bool
+	Logger    *log.Logger
 }
 
-// SetCrumb fetches and sets the CSRF crumb token on the request.
 func (r *Requester) SetCrumb(ctx context.Context, ar *APIRequest) error {
 	crumbData := map[string]string{}
 	response, _ := r.GetJSON(ctx, "/crumbIssuer/api/json", &crumbData, nil)
@@ -76,7 +75,6 @@ func (r *Requester) SetCrumb(ctx context.Context, ar *APIRequest) error {
 	return nil
 }
 
-// PostJSON sends a POST request with JSON content type.
 func (r *Requester) PostJSON(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
 	ar := NewAPIRequest("POST", endpoint, payload)
 	if err := r.SetCrumb(ctx, ar); err != nil {
@@ -87,7 +85,6 @@ func (r *Requester) PostJSON(ctx context.Context, endpoint string, payload io.Re
 	return r.Do(ctx, ar, &responseStruct, querystring)
 }
 
-// Post sends a POST request with form-urlencoded content type.
 func (r *Requester) Post(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
 	ar := NewAPIRequest("POST", endpoint, payload)
 	if err := r.SetCrumb(ctx, ar); err != nil {
@@ -98,7 +95,6 @@ func (r *Requester) Post(ctx context.Context, endpoint string, payload io.Reader
 	return r.Do(ctx, ar, &responseStruct, querystring)
 }
 
-// PostFiles sends a POST request with file attachments.
 func (r *Requester) PostFiles(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string, files []string) (*http.Response, error) {
 	ar := NewAPIRequest("POST", endpoint, payload)
 	if err := r.SetCrumb(ctx, ar); err != nil {
@@ -107,7 +103,6 @@ func (r *Requester) PostFiles(ctx context.Context, endpoint string, payload io.R
 	return r.Do(ctx, ar, &responseStruct, querystring, files)
 }
 
-// PostXML sends a POST request with XML content.
 func (r *Requester) PostXML(ctx context.Context, endpoint string, xml string, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
 	payload := bytes.NewBuffer([]byte(xml))
 	ar := NewAPIRequest("POST", endpoint, payload)
@@ -119,7 +114,6 @@ func (r *Requester) PostXML(ctx context.Context, endpoint string, xml string, re
 	return r.Do(ctx, ar, &responseStruct, querystring)
 }
 
-// GetJSON sends a GET request and expects a JSON response.
 func (r *Requester) GetJSON(ctx context.Context, endpoint string, responseStruct interface{}, query map[string]string) (*http.Response, error) {
 	ar := NewAPIRequest("GET", endpoint, nil)
 	ar.SetHeader("Content-Type", "application/json")
@@ -127,7 +121,6 @@ func (r *Requester) GetJSON(ctx context.Context, endpoint string, responseStruct
 	return r.Do(ctx, ar, &responseStruct, query)
 }
 
-// GetXML sends a GET request and expects an XML response.
 func (r *Requester) GetXML(ctx context.Context, endpoint string, responseStruct interface{}, query map[string]string) (*http.Response, error) {
 	ar := NewAPIRequest("GET", endpoint, nil)
 	ar.SetHeader("Content-Type", "application/xml")
@@ -135,20 +128,48 @@ func (r *Requester) GetXML(ctx context.Context, endpoint string, responseStruct 
 	return r.Do(ctx, ar, responseStruct, query)
 }
 
-// Get sends a GET request to the specified endpoint.
 func (r *Requester) Get(ctx context.Context, endpoint string, responseStruct interface{}, querystring map[string]string) (*http.Response, error) {
 	ar := NewAPIRequest("GET", endpoint, nil)
 	ar.Suffix = ""
 	return r.Do(ctx, ar, responseStruct, querystring)
 }
 
-// SetClient sets the HTTP client to use for requests.
+// Save response body to file, return os.File pointer and http.Response
+// Caller is responsible for closing the file
+func (r *Requester) SaveToFile(ctx context.Context, endpoint string, filepath string, querystring map[string]string) (*os.File, *http.Response, error) {
+	ar := NewAPIRequest("GET", endpoint, nil)
+	ar.Suffix = ""
+	response, err := r.Do(ctx, ar, nil, querystring)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	out, err := os.Create(filepath)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	_, err = io.Copy(out, response.Body)
+	if err != nil {
+		return nil,nil, err
+	}
+
+	return out, response, nil
+}
+
 func (r *Requester) SetClient(client *http.Client) *Requester {
 	r.Client = client
 	return r
 }
 
-// Do executes the API request and returns the HTTP response.
+// Add auth on redirect if required.
+func (r *Requester) redirectPolicyFunc(req *http.Request, via []*http.Request) error {
+	if r.BasicAuth != nil {
+		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
+	}
+	return nil
+}
+
 func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct interface{}, options ...interface{}) (*http.Response, error) {
 	if !strings.HasSuffix(ar.Endpoint, "/") && ar.Method != "POST" {
 		ar.Endpoint += "/"
@@ -195,18 +216,14 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 				return nil, err
 			}
 			if _, err = io.Copy(part, fileData); err != nil {
-				_ = fileData.Close()
 				return nil, err
 			}
-			_ = fileData.Close()
-		}
-		var params map[string]string
-		if ar.Payload != nil {
-			if err := json.NewDecoder(ar.Payload).Decode(&params); err != nil {
-				// Ignore decode errors - payload may not be JSON
-				params = nil
+			if err = fileData.Close(); err != nil {
+				return nil, err
 			}
 		}
+		var params map[string]string
+		json.NewDecoder(ar.Payload).Decode(&params)
 		for key, val := range params {
 			if err = writer.WriteField(key, val); err != nil {
 				return nil, err
@@ -236,9 +253,13 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 		req.Header.Add(k, ar.Headers.Get(k))
 	}
 
+	start := time.Now()
 	if response, err := r.Client.Do(req); err != nil {
 		return nil, err
 	} else {
+		if r.Logger != nil {
+			r.Logger.Printf("%s %s %s", ar.Method, ar.Endpoint, time.Since(start))
+		}
 		if v := ctx.Value("debug"); v != nil {
 			dump, err := httputil.DumpResponse(response, true)
 			if err != nil {
@@ -251,6 +272,8 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 			return nil, errors.New(errorText)
 		}
 		switch responseStruct.(type) {
+		case nil:
+			return response, nil
 		case *string:
 			return r.ReadRawResponse(response, responseStruct)
 		default:
@@ -261,9 +284,8 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 
 }
 
-// ReadRawResponse reads the response body as a raw string.
 func (r *Requester) ReadRawResponse(response *http.Response, responseStruct interface{}) (*http.Response, error) {
-	defer func() { _ = response.Body.Close() }()
+	defer response.Body.Close()
 
 	content, err := io.ReadAll(response.Body)
 	if err != nil {
@@ -272,18 +294,16 @@ func (r *Requester) ReadRawResponse(response *http.Response, responseStruct inte
 	if str, ok := responseStruct.(*string); ok {
 		*str = string(content)
 	} else {
-		return nil, fmt.Errorf("could not cast responseStruct to *string")
+		return nil, fmt.Errorf("Could not cast responseStruct to *string")
 	}
 
 	return response, nil
 }
 
-// ReadJSONResponse reads the response body as JSON and decodes it into responseStruct.
 func (r *Requester) ReadJSONResponse(response *http.Response, responseStruct interface{}) (*http.Response, error) {
-	defer func() { _ = response.Body.Close() }()
+	defer response.Body.Close()
 
-	if err := json.NewDecoder(response.Body).Decode(responseStruct); err != nil && err != io.EOF {
-		return response, err
-	}
+	json.NewDecoder(response.Body).Decode(responseStruct)
 	return response, nil
 }
+

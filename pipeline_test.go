@@ -318,6 +318,170 @@ func TestPipelineRun_GetNode_NotFound(t *testing.T) {
 	assert.Nil(t, node)
 }
 
+// --- PipelineRunsOptions.toQueryMap ---
+
+func TestPipelineRunsOptions_toQueryMap_Nil(t *testing.T) {
+	var opts *PipelineRunsOptions
+	assert.Nil(t, opts.toQueryMap())
+}
+
+func TestPipelineRunsOptions_toQueryMap_Empty(t *testing.T) {
+	opts := &PipelineRunsOptions{}
+	q := opts.toQueryMap()
+	assert.Empty(t, q)
+}
+
+func TestPipelineRunsOptions_toQueryMap_SinceOnly(t *testing.T) {
+	opts := &PipelineRunsOptions{Since: "#16"}
+	q := opts.toQueryMap()
+	assert.Equal(t, map[string]string{"since": "#16"}, q)
+}
+
+func TestPipelineRunsOptions_toQueryMap_FullStagesOnly(t *testing.T) {
+	opts := &PipelineRunsOptions{FullStages: true}
+	q := opts.toQueryMap()
+	assert.Equal(t, map[string]string{"fullStages": "true"}, q)
+}
+
+func TestPipelineRunsOptions_toQueryMap_AllFields(t *testing.T) {
+	opts := &PipelineRunsOptions{Since: "#5", FullStages: true}
+	q := opts.toQueryMap()
+	assert.Equal(t, map[string]string{"since": "#5", "fullStages": "true"}, q)
+}
+
+// --- GetPipelineRunsWithOptions ---
+
+func TestJob_GetPipelineRunsWithOptions_NilOpts(t *testing.T) {
+	jenkins := newMockJenkins()
+	var capturedQuery map[string]string
+	jenkins.Requester.(*MockRequester).GetJSONFunc = func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error) {
+		capturedQuery = query
+		return &http.Response{StatusCode: 200}, nil
+	}
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	_, err := job.GetPipelineRunsWithOptions(context.Background(), nil)
+	assert.NoError(t, err)
+	assert.Nil(t, capturedQuery)
+}
+
+func TestJob_GetPipelineRunsWithOptions_WithSince(t *testing.T) {
+	jenkins := newMockJenkins()
+	var capturedEndpoint string
+	var capturedQuery map[string]string
+	jenkins.Requester.(*MockRequester).GetJSONFunc = func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error) {
+		capturedEndpoint = endpoint
+		capturedQuery = query
+		if runs, ok := response.(*[]PipelineRun); ok {
+			*runs = []PipelineRun{
+				{
+					ID: "17", Name: "#17", Status: "SUCCESS",
+					URLs: map[string]map[string]string{"self": {"href": "/job/pipe/17/wfapi/describe"}},
+				},
+				{
+					ID: "16", Name: "#16", Status: "SUCCESS",
+					URLs: map[string]map[string]string{"self": {"href": "/job/pipe/16/wfapi/describe"}},
+				},
+			}
+		}
+		return &http.Response{StatusCode: 200}, nil
+	}
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	runs, err := job.GetPipelineRunsWithOptions(context.Background(), &PipelineRunsOptions{Since: "#16"})
+	assert.NoError(t, err)
+	assert.Equal(t, "/job/pipe/wfapi/runs", capturedEndpoint)
+	assert.Equal(t, "#16", capturedQuery["since"])
+	assert.Equal(t, 2, len(runs))
+	assert.Equal(t, job, runs[0].Job)
+}
+
+func TestJob_GetPipelineRunsWithOptions_WithFullStages(t *testing.T) {
+	jenkins := newMockJenkins()
+	var capturedQuery map[string]string
+	jenkins.Requester.(*MockRequester).GetJSONFunc = func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error) {
+		capturedQuery = query
+		return &http.Response{StatusCode: 200}, nil
+	}
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	_, err := job.GetPipelineRunsWithOptions(context.Background(), &PipelineRunsOptions{FullStages: true})
+	assert.NoError(t, err)
+	assert.Equal(t, "true", capturedQuery["fullStages"])
+}
+
+func TestJob_GetPipelineRunsWithOptions_WithAllOptions(t *testing.T) {
+	jenkins := newMockJenkins()
+	var capturedQuery map[string]string
+	jenkins.Requester.(*MockRequester).GetJSONFunc = func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error) {
+		capturedQuery = query
+		return &http.Response{StatusCode: 200}, nil
+	}
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	opts := &PipelineRunsOptions{Since: "#10", FullStages: true}
+	_, err := job.GetPipelineRunsWithOptions(context.Background(), opts)
+	assert.NoError(t, err)
+	assert.Equal(t, "#10", capturedQuery["since"])
+	assert.Equal(t, "true", capturedQuery["fullStages"])
+}
+
+func TestJob_GetPipelineRunsWithOptions_Error(t *testing.T) {
+	jenkins := newMockJenkins()
+	jenkins.Requester.(*MockRequester).err = assert.AnError
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	runs, err := job.GetPipelineRunsWithOptions(context.Background(), &PipelineRunsOptions{Since: "#1"})
+	assert.Error(t, err)
+	assert.Nil(t, runs)
+}
+
+func TestJob_GetPipelineRunsWithOptions_SetsJobAndUpdatesRuns(t *testing.T) {
+	jenkins := newMockJenkins()
+	jenkins.Requester.(*MockRequester).GetJSONFunc = func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error) {
+		if runs, ok := response.(*[]PipelineRun); ok {
+			*runs = []PipelineRun{
+				{
+					ID: "5", Name: "#5", Status: "SUCCESS",
+					URLs: map[string]map[string]string{"self": {"href": "/job/pipe/5/wfapi/describe"}},
+					Stages: []PipelineNode{
+						{
+							ID: "1", Name: "Build", Status: "SUCCESS",
+							URLs: map[string]map[string]string{"self": {"href": "/job/pipe/5/execution/node/1/wfapi/describe"}},
+						},
+					},
+				},
+			}
+		}
+		return &http.Response{StatusCode: 200}, nil
+	}
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	runs, err := job.GetPipelineRunsWithOptions(context.Background(), &PipelineRunsOptions{FullStages: true})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(runs))
+	assert.Equal(t, job, runs[0].Job)
+	assert.Equal(t, "/job/pipe/5", runs[0].Base)
+	assert.Equal(t, &runs[0], runs[0].Stages[0].Run)
+	assert.Equal(t, "/job/pipe/5/execution/node/1", runs[0].Stages[0].Base)
+}
+
+// --- GetPipelineRuns delegates to GetPipelineRunsWithOptions ---
+
+func TestJob_GetPipelineRuns_DelegatesToWithOptions(t *testing.T) {
+	jenkins := newMockJenkins()
+	var capturedQuery map[string]string
+	jenkins.Requester.(*MockRequester).GetJSONFunc = func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error) {
+		capturedQuery = query
+		return &http.Response{StatusCode: 200}, nil
+	}
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	_, err := job.GetPipelineRuns(context.Background())
+	assert.NoError(t, err)
+	assert.Nil(t, capturedQuery)
+}
+
 func TestPipelineRun_Update(t *testing.T) {
 	run := &PipelineRun{
 		ID:     "1",
