@@ -19,7 +19,6 @@ package gojenkins
 
 import (
 	"context"
-	"fmt"
 	"regexp"
 )
 
@@ -84,7 +83,7 @@ type PipelineNodeLog struct {
 	NodeStatus string
 	Length     int64
 	HasMore    bool
-	Text       string
+	Text       string `json:"text"`
 	ConsoleURL string
 }
 
@@ -103,9 +102,37 @@ func (run *PipelineRun) update() {
 	}
 }
 
+// PipelineRunsOptions holds optional query parameters for the wfapi/runs endpoint.
+type PipelineRunsOptions struct {
+	// Since filters runs to only return those after the specified run ID (e.g., "#16").
+	Since string
+	// FullStages when true includes full stage details in the response.
+	FullStages bool
+}
+
+func (opts *PipelineRunsOptions) toQueryMap() map[string]string {
+	if opts == nil {
+		return nil
+	}
+	q := make(map[string]string)
+	if opts.Since != "" {
+		q["since"] = opts.Since
+	}
+	if opts.FullStages {
+		q["fullStages"] = "true"
+	}
+	return q
+}
+
 // GetPipelineRuns returns all pipeline runs for a pipeline job.
 func (job *Job) GetPipelineRuns(ctx context.Context) (pr []PipelineRun, err error) {
-	_, err = job.Jenkins.Requester.GetJSON(ctx, job.Base+"/wfapi/runs", &pr, nil)
+	return job.GetPipelineRunsWithOptions(ctx, nil)
+}
+
+// GetPipelineRunsWithOptions returns pipeline runs with optional query parameters
+// such as filtering by since run ID or requesting full stage details.
+func (job *Job) GetPipelineRunsWithOptions(ctx context.Context, opts *PipelineRunsOptions) (pr []PipelineRun, err error) {
+	_, err = job.Jenkins.Requester.GetJSON(ctx, job.Base+"/wfapi/runs", &pr, opts.toQueryMap())
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +198,7 @@ func (pr *PipelineRun) GetNode(ctx context.Context, id string) (node *PipelineNo
 func (node *PipelineNode) GetLog(ctx context.Context) (log *PipelineNodeLog, err error) {
 	log = new(PipelineNodeLog)
 	href := node.Base + "/wfapi/log"
-	fmt.Println(href)
+	// fmt.Println(href)
 	_, err = node.Run.Job.Jenkins.Requester.GetJSON(ctx, href, log, nil)
 	if err != nil {
 		return nil, err

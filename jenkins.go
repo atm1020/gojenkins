@@ -560,7 +560,7 @@ func (j *Jenkins) GetAllViews(ctx context.Context) ([]*View, error) {
 	return views, nil
 }
 
-func (j *Jenkins) DeleteView(ctx context.Context, name string) (error) {
+func (j *Jenkins) DeleteView(ctx context.Context, name string) error {
 	endpoint := fmt.Sprintf("/view/%s/doDelete", name)
 	r, err := j.Requester.Post(ctx, endpoint, nil, nil, nil)
 
@@ -573,7 +573,6 @@ func (j *Jenkins) DeleteView(ctx context.Context, name string) (error) {
 	}
 	return errors.New(strconv.Itoa(r.StatusCode))
 }
-
 
 // Create View
 // First Parameter - name of the View
@@ -620,6 +619,14 @@ func (j *Jenkins) Poll(ctx context.Context) (int, error) {
 	return resp.StatusCode, nil
 }
 
+// SetLogger sets a logger on the underlying Requester to log each request's
+// method, endpoint, and duration. Pass nil to disable logging.
+func (j *Jenkins) SetLogger(logger *log.Logger) {
+	if r, ok := j.Requester.(*Requester); ok {
+		r.Logger = logger
+	}
+}
+
 // Creates a new Jenkins Instance
 // Optional parameters are: client, username, password or token
 // After creating an instance call init method.
@@ -636,4 +643,162 @@ func CreateJenkins(client *http.Client, base string, auth ...interface{}) *Jenki
 	}
 	j.Requester = requester
 	return j
+}
+
+// GlobalSearch uses the modern JSON API (/search/suggest) available in Jenkins >= 2.492.
+// Returns full Suggestions with Group, Type, and direct URL.
+// Returns an error if Jenkins version is too old; use GlobalSearchLegacy() instead.
+func (j *Jenkins) GlobalSearch(ctx context.Context, query string) (*SearchResponse, error) {
+	if !j.IsVersionGreaterOrEqual("2.492") {
+		return nil, fmt.Errorf("Jenkins %s does not support modern search; use GlobalSearchLegacy()", j.Version)
+	}
+	return j.globalSearchJSON(ctx, query)
+}
+
+// GlobalSearchLegacy uses the old HTML API (/search/) for Jenkins < 2.492.
+// Returns LegacySuggestions with Name and unresolved URL.
+// Call LegacySuggestion.Resolve() to get a standard *Suggestion with a direct URL.
+func (j *Jenkins) GlobalSearchLegacy(ctx context.Context, query string) (*LegacySearchResponse, error) {
+	return j.globalSearchHTML(ctx, query)
+}
+
+// globalSearchJSON uses the new JSON API (/search/suggest)
+func (j *Jenkins) globalSearchJSON(ctx context.Context, query string) (*SearchResponse, error) {
+	result := new(SearchResponse)
+	data := map[string]string{
+		"query": query,
+	}
+
+	r, err := j.Requester.Get(ctx, "/search/suggest", result, data)
+	if err != nil {
+		return nil, err
+	}
+
+	if r.StatusCode != 200 {
+		return nil, errors.New(strconv.Itoa(r.StatusCode))
+	}
+
+	return result, nil
+}
+
+// getCrumbQueryParams fetches the Jenkins CSRF crumb and returns it as query params.
+// Returns nil if CSRF protection is disabled (safe to ignore).
+func (j *Jenkins) getCrumbQueryParams(ctx context.Context) map[string]string {
+	crumbData := map[string]string{}
+	resp, err := j.Requester.GetJSON(ctx, "/crumbIssuer/api/json", &crumbData, nil)
+	if err != nil || resp == nil || resp.StatusCode != 200 {
+		return nil
+	}
+	field := crumbData["crumbRequestField"]
+	crumb := crumbData["crumb"]
+	if field == "" || crumb == "" {
+		return nil
+	}
+	return map[string]string{field: crumb}
+}
+
+// globalSearchHTML uses the old HTML API (/search/)
+// Returns 404 for multiple results, 302 (auto-followed to 200) for a single result.
+func (j *Jenkins) globalSearchHTML(ctx context.Context, query string) (*LegacySearchResponse, error) {
+	data := map[string]string{"q": query}
+
+	// Add CSRF crumb to query params (required by legacy Jenkins)
+	for k, v := range j.getCrumbQueryParams(ctx) {
+		data[k] = v
+	}
+
+	resp, err := j.Requester.Get(ctx, "/search/", nil, data)
+	if err != nil {
+		return nil, err
+	}
+
+	// 302 → single result; http.Client auto-followed redirect to the final job URL.
+	// Detect this by checking that status is 200 but we landed outside /search/.
+	if resp.StatusCode == 200 && resp.Request != nil && !strings.Contains(resp.Request.URL.Path, "/search/") {
+		finalURL := resp.Request.URL.String()
+		relURL := strings.TrimPrefix(finalURL, j.Server)
+		name := lastPathSegment(relURL)
+		return &LegacySearchResponse{
+			Suggestions: []*LegacySuggestion{{Name: name, URL: relURL}},
+		}, nil
+	}
+
+	// 404 = multiple results (expected for legacy search); anything else is an error.
+	if resp.StatusCode != 404 && resp.StatusCode != 200 {
+		return nil, fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+
+	suggestions, err := parseSearchHTML(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return &LegacySearchResponse{
+		Suggestions: suggestions,
+	}, nil
+}
+
+// IsVersionGreaterOrEqual checks if Jenkins version is >= the specified version.
+// Useful for consumers that need to choose between modern and legacy APIs at runtime.
+// Version format: "2.516" or "2.516.1"
+func (j *Jenkins) IsVersionGreaterOrEqual(targetVersion string) bool {
+	if j.Version == "" {
+		// If version is unknown, assume newer version for safety
+		return true
+	}
+
+	current, err := parseVersion(j.Version)
+	if err != nil {
+		// If parsing fails, assume newer version for safety
+		return true
+	}
+
+	target, err := parseVersion(targetVersion)
+	if err != nil {
+		// If target parsing fails, assume newer version for safety
+		return true
+	}
+
+	// Compare major version
+	if current[0] > target[0] {
+		return true
+	}
+	if current[0] < target[0] {
+		return false
+	}
+
+	// Compare minor version
+	if current[1] > target[1] {
+		return true
+	}
+	if current[1] < target[1] {
+		return false
+	}
+
+	// Compare patch version
+	return current[2] >= target[2]
+}
+
+// parseVersion extracts major, minor, patch from version string
+// Examples: "2.516", "2.440.1", "2.426.3"
+// Returns error if version string is invalid
+func parseVersion(version string) ([]int, error) {
+	parts := []int{0, 0, 0}
+
+	// Split by dots
+	segments := strings.Split(version, ".")
+
+	if len(segments) == 0 {
+		return parts, errors.New("invalid version string: empty")
+	}
+
+	// Parse segments (major, minor, patch)
+	for i := 0; i < len(segments) && i < 3; i++ {
+		val, err := strconv.Atoi(segments[i])
+		if err != nil {
+			return parts, fmt.Errorf("invalid version segment '%s': %w", segments[i], err)
+		}
+		parts[i] = val
+	}
+
+	return parts, nil
 }

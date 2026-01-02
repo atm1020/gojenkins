@@ -18,6 +18,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"os"
 )
 
 // MockRequester is a mock implementation of JenkinsRequester for testing.
@@ -28,13 +29,14 @@ type MockRequester struct {
 	lastEndpoint string
 
 	// Function fields allow customizing behavior per test
-	GetJSONFunc   func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
-	PostFunc      func(ctx context.Context, endpoint string, payload io.Reader, response interface{}, query map[string]string) (*http.Response, error)
-	PostXMLFunc   func(ctx context.Context, endpoint string, xml string, response interface{}, query map[string]string) (*http.Response, error)
-	PostJSONFunc  func(ctx context.Context, endpoint string, payload io.Reader, response interface{}, query map[string]string) (*http.Response, error)
-	PostFilesFunc func(ctx context.Context, endpoint string, payload io.Reader, response interface{}, query map[string]string, files []string) (*http.Response, error)
-	GetFunc       func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
-	GetXMLFunc    func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
+	GetJSONFunc    func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
+	PostFunc       func(ctx context.Context, endpoint string, payload io.Reader, response interface{}, query map[string]string) (*http.Response, error)
+	PostXMLFunc    func(ctx context.Context, endpoint string, xml string, response interface{}, query map[string]string) (*http.Response, error)
+	PostJSONFunc   func(ctx context.Context, endpoint string, payload io.Reader, response interface{}, query map[string]string) (*http.Response, error)
+	PostFilesFunc  func(ctx context.Context, endpoint string, payload io.Reader, response interface{}, query map[string]string, files []string) (*http.Response, error)
+	GetFunc        func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
+	GetXMLFunc     func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
+	SaveToFileFunc func(ctx context.Context, endpoint string, filepath string, querystring map[string]string) (*os.File, *http.Response, error)
 }
 
 // GetJSON implements JenkinsRequester.
@@ -142,6 +144,18 @@ func (m *MockRequester) GetXML(ctx context.Context, endpoint string, response in
 	return &http.Response{StatusCode: 200}, nil
 }
 
+// SaveToFile implements JenkinsRequester.
+func (m *MockRequester) SaveToFile(ctx context.Context, endpoint string, filepath string, querystring map[string]string) (*os.File, *http.Response, error) {
+	m.lastEndpoint = endpoint
+	if m.SaveToFileFunc != nil {
+		return m.SaveToFileFunc(ctx, endpoint, filepath, querystring)
+	}
+	if m.err != nil {
+		return nil, nil, m.err
+	}
+	return nil, &http.Response{StatusCode: 200}, nil
+}
+
 // Ensure MockRequester implements JenkinsRequester
 var _ JenkinsRequester = (*MockRequester)(nil)
 
@@ -149,6 +163,7 @@ var _ JenkinsRequester = (*MockRequester)(nil)
 func newMockJenkins() *Jenkins {
 	return &Jenkins{
 		Server:    "http://localhost:8080",
+		Version:   "2.500",
 		Requester: &MockRequester{},
 		Raw:       &ExecutorResponse{},
 	}
