@@ -151,7 +151,7 @@ func (r *Requester) SaveToFile(ctx context.Context, endpoint string, filepath st
 
 	_, err = io.Copy(out, response.Body)
 	if err != nil {
-		return nil,nil, err
+		return nil, nil, err
 	}
 
 	return out, response, nil
@@ -206,13 +206,11 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 		for _, file := range files {
 			fileData, err := os.Open(file)
 			if err != nil {
-				Error.Println(err.Error())
 				return nil, err
 			}
 
 			part, err := writer.CreateFormFile("file", filepath.Base(file))
 			if err != nil {
-				Error.Println(err.Error())
 				return nil, err
 			}
 			if _, err = io.Copy(part, fileData); err != nil {
@@ -263,7 +261,7 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 		if v := ctx.Value("debug"); v != nil {
 			dump, err := httputil.DumpResponse(response, true)
 			if err != nil {
-				log.Fatal(err)
+				return nil, fmt.Errorf("failed to dump debug response: %w", err)
 			}
 			log.Printf("DEBUG %q\n", dump)
 		}
@@ -306,4 +304,3 @@ func (r *Requester) ReadJSONResponse(response *http.Response, responseStruct int
 	json.NewDecoder(response.Body).Decode(responseStruct)
 	return response, nil
 }
-

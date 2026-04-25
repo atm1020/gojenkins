@@ -474,8 +474,7 @@ func (j *Job) InvokeSimple(ctx context.Context, params map[string]string) (int64
 		return 0, err
 	}
 	if isQueued {
-		Error.Printf("%s is already running", j.GetName())
-		return 0, nil
+		return 0, fmt.Errorf("will not request new build because %s is already running", j.GetName())
 	}
 
 	endpoint := "/build"
@@ -525,8 +524,7 @@ func (j *Job) Invoke(ctx context.Context, files []string, skipIfRunning bool, pa
 		return false, err
 	}
 	if isQueued {
-		Error.Printf("%s is already running", j.GetName())
-		return false, nil
+		return false, fmt.Errorf("will not request new build because %s is already running", j.GetName())
 	}
 	isRunning, err := j.IsRunning(ctx)
 	if err != nil {

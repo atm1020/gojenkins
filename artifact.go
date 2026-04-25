@@ -42,8 +42,7 @@ func (a Artifact) GetData(ctx context.Context) ([]byte, error) {
 
 	code := response.StatusCode
 	if code != 200 {
-		Error.Printf("Jenkins responded with StatusCode: %d", code)
-		return nil, errors.New("could not get File Contents")
+		return nil, fmt.Errorf("could not get file contents: Jenkins responded with status code %d", code)
 	}
 	return []byte(data), nil
 }
@@ -75,7 +74,6 @@ func (a Artifact) Save(ctx context.Context, path string) (bool, error) {
 // Save Artifact to directory using Artifact filename.
 func (a Artifact) SaveToDir(ctx context.Context, dir string) (bool, error) {
 	if _, err := os.Stat(dir); err != nil {
-		Error.Printf("can't save artifact: directory %s does not exist", dir)
 		return false, fmt.Errorf("can't save artifact: directory %s does not exist", dir)
 	}
 	saved, err := a.Save(ctx, path.Join(dir, a.FileName))
