@@ -56,7 +56,9 @@ func (a Artifact) Save(ctx context.Context, path string) (bool, error) {
 	}
 
 	if _, err = os.Stat(path); err == nil {
-		Warning.Println("Local Copy already exists, Overwriting...")
+		// TODO: Handle duplicate artifact downloads explicitly (skip/rename/checksum)
+		// so we avoid repeated overwrite noise for repeated download calls.
+		// Warning.Println("Local Copy already exists, Overwriting...")
 	}
 
 	err = os.WriteFile(path, data, 0644)
