@@ -166,7 +166,7 @@ func resolveBareName(ctx context.Context, name string, jenkins *Jenkins) (string
 	if err != nil {
 		return "", fmt.Errorf("search request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusFound { // 302
 		return "", fmt.Errorf("expected 302 redirect from search, got %d", resp.StatusCode)

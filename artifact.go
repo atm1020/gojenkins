@@ -55,12 +55,6 @@ func (a Artifact) Save(ctx context.Context, path string) (bool, error) {
 		return false, errors.New("no data received, not saving file")
 	}
 
-	if _, err = os.Stat(path); err == nil {
-		// TODO: Handle duplicate artifact downloads explicitly (skip/rename/checksum)
-		// so we avoid repeated overwrite noise for repeated download calls.
-		// Warning.Println("Local Copy already exists, Overwriting...")
-	}
-
 	err = os.WriteFile(path, data, 0644)
 	if err != nil {
 		return false, err

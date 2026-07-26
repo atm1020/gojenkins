@@ -162,14 +162,6 @@ func (r *Requester) SetClient(client *http.Client) *Requester {
 	return r
 }
 
-// Add auth on redirect if required.
-func (r *Requester) redirectPolicyFunc(req *http.Request, via []*http.Request) error {
-	if r.BasicAuth != nil {
-		req.SetBasicAuth(r.BasicAuth.Username, r.BasicAuth.Password)
-	}
-	return nil
-}
-
 func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct interface{}, options ...interface{}) (*http.Response, error) {
 	if !strings.HasSuffix(ar.Endpoint, "/") && ar.Method != "POST" {
 		ar.Endpoint += "/"
@@ -221,7 +213,9 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 			}
 		}
 		var params map[string]string
-		json.NewDecoder(ar.Payload).Decode(&params)
+		if err = json.NewDecoder(ar.Payload).Decode(&params); err != nil {
+			return nil, err
+		}
 		for key, val := range params {
 			if err = writer.WriteField(key, val); err != nil {
 				return nil, err
@@ -283,7 +277,7 @@ func (r *Requester) Do(ctx context.Context, ar *APIRequest, responseStruct inter
 }
 
 func (r *Requester) ReadRawResponse(response *http.Response, responseStruct interface{}) (*http.Response, error) {
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
 	content, err := io.ReadAll(response.Body)
 	if err != nil {
@@ -292,15 +286,17 @@ func (r *Requester) ReadRawResponse(response *http.Response, responseStruct inte
 	if str, ok := responseStruct.(*string); ok {
 		*str = string(content)
 	} else {
-		return nil, fmt.Errorf("Could not cast responseStruct to *string")
+		return nil, errors.New("could not cast responseStruct to *string")
 	}
 
 	return response, nil
 }
 
 func (r *Requester) ReadJSONResponse(response *http.Response, responseStruct interface{}) (*http.Response, error) {
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 
-	json.NewDecoder(response.Body).Decode(responseStruct)
+	if err := json.NewDecoder(response.Body).Decode(responseStruct); err != nil && err != io.EOF {
+		return nil, err
+	}
 	return response, nil
 }

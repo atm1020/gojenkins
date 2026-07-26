@@ -29,7 +29,7 @@ func TestPipelineRun_SaveTextLog_Success(t *testing.T) {
 	jenkins := newMockJenkins()
 	tmpFile, err := os.CreateTemp(t.TempDir(), "jenkins-log-*")
 	assert.NoError(t, err)
-	defer tmpFile.Close()
+	defer func() { _ = tmpFile.Close() }()
 
 	jenkins.Requester.(*MockRequester).SaveToFileFunc = func(ctx context.Context, endpoint string, filepath string, querystring map[string]string) (*os.File, *http.Response, error) {
 		assert.Equal(t, "/job/my-pipeline/1/consoleText", endpoint)

@@ -266,7 +266,25 @@ func (j *Jenkins) DeleteJob(ctx context.Context, name string) (bool, error) {
 
 // Get a job object
 func (j *Jenkins) GetJobObj(ctx context.Context, name string) *Job {
-	return &Job{Jenkins: j, Raw: new(JobResponse), Base: "/job/" + name}
+	return j.JobRef(name)
+}
+
+// JobRef returns a handle to the job identified by id, nested under
+// parentIDs (outermost folder first), without contacting Jenkins. The
+// returned Job's Raw response is empty until something polls it, so callers
+// that already know what they are addressing can issue a single targeted
+// request (e.g. Job.GetDetailedChildren) instead of a discovery poll first.
+func (j *Jenkins) JobRef(id string, parentIDs ...string) *Job {
+	// Copy rather than append onto parentIDs: a caller's slice with spare
+	// capacity would otherwise be written through.
+	segments := make([]string, 0, len(parentIDs)+1)
+	segments = append(segments, parentIDs...)
+	segments = append(segments, id)
+	return &Job{
+		Jenkins: j,
+		Raw:     new(JobResponse),
+		Base:    "/job/" + strings.Join(segments, "/job/"),
+	}
 }
 
 // Invoke a job.

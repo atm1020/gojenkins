@@ -16,6 +16,7 @@ package gojenkins
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"testing"
 
@@ -507,4 +508,29 @@ func TestPipelineRun_Update(t *testing.T) {
 	assert.Equal(t, "/job/test-pipeline/1", run.Base)
 	assert.Equal(t, run, run.Stages[0].Run)
 	assert.Equal(t, "/job/test-pipeline/1/execution/node/10", run.Stages[0].Base)
+}
+
+// The pipeline-stage-view API serialises parentNodes as strings, matching the
+// form of the node IDs themselves. Decoding them as numbers made every
+// describe call for a node with a predecessor fail to unmarshal.
+func TestPipelineNode_UnmarshalJSON_ParentNodesAreStrings(t *testing.T) {
+	payload := []byte(`{
+		"id": "42",
+		"name": "Scan",
+		"status": "SUCCESS",
+		"startTimeMillis": 1700000000000,
+		"durationMillis": 1234,
+		"parentNodes": ["40"],
+		"stageFlowNodes": [
+			{"id": "43", "name": "Shell Script", "status": "SUCCESS", "parentNodes": ["42"]}
+		]
+	}`)
+
+	var node PipelineNode
+	err := json.Unmarshal(payload, &node)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "42", node.ID)
+	assert.Equal(t, []string{"40"}, node.ParentNodes)
+	assert.Equal(t, []string{"42"}, node.StageFlowNodes[0].ParentNodes)
 }

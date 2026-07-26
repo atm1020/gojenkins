@@ -62,7 +62,7 @@ func TestArtifactGetDataNotFound(t *testing.T) {
 
 	assert.Error(t, err)
 	assert.Nil(t, data)
-	assert.Contains(t, err.Error(), "could not get File Contents")
+	assert.Contains(t, err.Error(), "could not get file contents")
 }
 
 // TestArtifactGetDataError tests artifact retrieval with network error

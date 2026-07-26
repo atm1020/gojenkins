@@ -16,7 +16,11 @@ package gojenkins
 
 import (
 	"context"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -426,6 +430,126 @@ func TestJob_GetAllBuildIds_Error(t *testing.T) {
 	assert.Nil(t, builds)
 }
 
+// detailedChildrenServer stands up a Jenkins stub that answers the folder's
+// api/json endpoint with body, recording the requests it saw so tests can
+// assert on the tree projection actually sent over the wire.
+func detailedChildrenServer(t *testing.T, body string) (*Jenkins, *[]url.Values) {
+	t.Helper()
+	var seen []url.Values
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen = append(seen, r.URL.Query())
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	return CreateJenkins(nil, srv.URL), &seen
+}
+
+func TestJob_GetDetailedChildren_RequestsChildrenOnlyTree(t *testing.T) {
+	jenkins, seen := detailedChildrenServer(t, `{"jobs":[]}`)
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{}, Base: "/job/multibranch-project"}
+
+	_, err := job.GetDetailedChildren(context.Background())
+	assert.NoError(t, err)
+	assert.Len(t, *seen, 1, "detailed children must cost exactly one request")
+
+	tree := (*seen)[0].Get("tree")
+	assert.True(t, strings.HasPrefix(tree, "jobs["),
+		"tree must be children-only, got %q", tree)
+	assert.NotContains(t, tree, "*", "tree must not request the parent job wildcard payload")
+	for _, field := range []string{
+		"_class", "name", "url", "color", "buildable",
+		"healthReport[score]",
+		"lastSuccessfulBuild[number,timestamp]",
+		"lastFailedBuild[number,timestamp]",
+		"lastBuild[number,timestamp,duration]",
+	} {
+		assert.Contains(t, tree, field)
+	}
+}
+
+func TestJob_GetDetailedChildren_DecodesChildrenInResponseOrder(t *testing.T) {
+	jenkins, _ := detailedChildrenServer(t, `{"jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob",
+		 "name":"master","url":"http://jenkins/job/mb/job/master/","color":"blue",
+		 "buildable":true,
+		 "healthReport":[{"score":100},{"score":40}],
+		 "lastSuccessfulBuild":{"number":2,"timestamp":1000},
+		 "lastFailedBuild":null,
+		 "lastBuild":{"number":2,"timestamp":1000,"duration":26000}},
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob",
+		 "name":"merge-queue%2FPR-48","url":"http://jenkins/job/mb/job/merge-queue%2FPR-48/",
+		 "color":"notbuilt","buildable":false},
+		{"_class":"com.cloudbees.hudson.plugins.folder.Folder",
+		 "name":"sub","url":"http://jenkins/job/mb/job/sub/","color":null}
+	]}`)
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{}, Base: "/job/mb"}
+
+	children, err := job.GetDetailedChildren(context.Background())
+	assert.NoError(t, err)
+	assert.Len(t, children, 3)
+
+	assert.Equal(t, []string{"master", "merge-queue%2FPR-48", "sub"},
+		[]string{children[0].Name, children[1].Name, children[2].Name},
+		"children must keep Jenkins' response order")
+
+	master := children[0]
+	assert.Equal(t, "http://jenkins/job/mb/job/master/", master.Url)
+	assert.Equal(t, "blue", master.Color)
+	assert.Equal(t, []HealthReport{{Score: 100}, {Score: 40}}, master.HealthReport)
+	assert.Equal(t, int64(2), master.LastSuccessfulBuild.Number)
+	assert.Equal(t, int64(26000), master.LastBuild.Duration)
+	assert.Nil(t, master.LastFailedBuild, "an explicit null build ref decodes as missing data")
+}
+
+func TestJob_GetDetailedChildren_DistinguishesAbsentFromFalseBuildable(t *testing.T) {
+	jenkins, _ := detailedChildrenServer(t, `{"jobs":[
+		{"name":"pipeline","buildable":true},
+		{"name":"orphaned","buildable":false},
+		{"name":"folder"}
+	]}`)
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{}, Base: "/job/mb"}
+
+	children, err := job.GetDetailedChildren(context.Background())
+	assert.NoError(t, err)
+	assert.Len(t, children, 3)
+
+	if assert.NotNil(t, children[0].Buildable) {
+		assert.True(t, *children[0].Buildable)
+	}
+	if assert.NotNil(t, children[1].Buildable) {
+		assert.False(t, *children[1].Buildable, "an explicit false must stay distinguishable from absent")
+	}
+	assert.Nil(t, children[2].Buildable, "an absent buildable must decode as unknown")
+}
+
+func TestJob_GetDetailedChildren_DoesNotMutateRaw(t *testing.T) {
+	jenkins, _ := detailedChildrenServer(t, `{"name":"replaced","jobs":[
+		{"_class":"org.jenkinsci.plugins.workflow.job.WorkflowJob","name":"master","url":"http://jenkins/job/mb/job/master/"}
+	]}`)
+	raw := &JobResponse{
+		Name: "mb",
+		Jobs: []InnerJob{{Name: "stale", Url: "http://jenkins/job/mb/job/stale/"}},
+	}
+	job := &Job{Jenkins: jenkins, Raw: raw, Base: "/job/mb"}
+
+	_, err := job.GetDetailedChildren(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, "mb", job.Raw.Name, "the shared raw response must not be overwritten")
+	assert.Equal(t, []InnerJob{{Name: "stale", Url: "http://jenkins/job/mb/job/stale/"}}, job.Raw.Jobs)
+}
+
+func TestJob_GetDetailedChildren_Error(t *testing.T) {
+	jenkins := newMockJenkins()
+	jenkins.Requester.(*MockRequester).err = assert.AnError
+
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{}, Base: "/job/mb"}
+
+	children, err := job.GetDetailedChildren(context.Background())
+	assert.Error(t, err)
+	assert.Nil(t, children)
+}
+
 func TestJob_GetConfig_Success(t *testing.T) {
 	expectedConfig := `<?xml version='1.0' encoding='UTF-8'?><project></project>`
 
@@ -574,8 +698,11 @@ func TestJob_InvokeSimple_AlreadyQueued(t *testing.T) {
 	}
 
 	queueId, err := job.InvokeSimple(context.Background(), nil)
-	assert.NoError(t, err)
-	assert.Equal(t, int64(0), queueId) // Returns 0 when already queued
+	// A job that is already queued is reported rather than silently no-op'd,
+	// so a caller (e.g. a TUI trigger action) can tell the user why nothing
+	// happened.
+	assert.ErrorContains(t, err, "already running")
+	assert.Equal(t, int64(0), queueId)
 }
 
 func TestJob_GetBuild_Success(t *testing.T) {

@@ -43,11 +43,42 @@ type JobBuild struct {
 }
 
 // InnerJob represents a nested job within a folder or multibranch pipeline.
+// For health and last-build detail, see DetailedInnerJob.
 type InnerJob struct {
 	Class string `json:"_class"`
 	Name  string `json:"name"`
 	Url   string `json:"url"`
 	Color string `json:"color"`
+}
+
+// DetailedInnerJob is a child job summary fetched with an explicit tree
+// projection (see Job.GetDetailedChildren). Buildable is a pointer because
+// Jenkins omits it for child kinds that are not buildable at all (a nested
+// Folder), which must stay distinguishable from an explicit false.
+type DetailedInnerJob struct {
+	Class string `json:"_class"`
+	Name  string `json:"name"`
+	Url   string `json:"url"`
+	Color string `json:"color"`
+
+	Buildable           *bool          `json:"buildable"`
+	HealthReport        []HealthReport `json:"healthReport"`
+	LastSuccessfulBuild *BuildRef      `json:"lastSuccessfulBuild"`
+	LastFailedBuild     *BuildRef      `json:"lastFailedBuild"`
+	LastBuild           *BuildRef      `json:"lastBuild"`
+}
+
+// BuildRef is a lightweight reference to a build, as returned inline within
+// a job's JSON representation (e.g. lastBuild, lastSuccessfulBuild).
+type BuildRef struct {
+	Number    int64 `json:"number"`
+	Timestamp int64 `json:"timestamp"`
+	Duration  int64 `json:"duration"` // milliseconds
+}
+
+// HealthReport summarizes a job's recent build health as a 0-100 score.
+type HealthReport struct {
+	Score int64 `json:"score"`
 }
 
 // ParameterDefinition represents a build parameter definition for a parameterized job.
@@ -253,6 +284,33 @@ func (j *Job) GetDownstreamJobsMetadata() []InnerJob {
 // GetInnerJobsMetadata returns metadata for all inner jobs (e.g., in a folder) without fetching full details.
 func (j *Job) GetInnerJobsMetadata() []InnerJob {
 	return j.Raw.Jobs
+}
+
+// detailedChildrenTree projects only the jobs[] collection, deliberately
+// without a leading "*": the parent job's own payload is dead weight here.
+const detailedChildrenTree = "jobs[_class,name,url,color,buildable," +
+	"healthReport[score]," +
+	"lastSuccessfulBuild[number,timestamp]," +
+	"lastFailedBuild[number,timestamp]," +
+	"lastBuild[number,timestamp,duration]]"
+
+// GetDetailedChildren returns this job's children with health, last-build
+// refs, and buildability, in Jenkins' response order, using one request.
+// It leaves j.Raw untouched, so a shallow child list read by other callers
+// is not silently swapped for a differently-shaped one.
+func (j *Job) GetDetailedChildren(ctx context.Context) ([]DetailedInnerJob, error) {
+	var payload struct {
+		Jobs []DetailedInnerJob `json:"jobs"`
+	}
+	response, err := j.Jenkins.Requester.GetJSON(ctx, j.Base, &payload,
+		map[string]string{"tree": detailedChildrenTree})
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != 200 {
+		return nil, fmt.Errorf("could not get children: Jenkins responded with status code %d", response.StatusCode)
+	}
+	return payload.Jobs, nil
 }
 
 // GetUpstreamJobs retrieves all upstream jobs with full details.

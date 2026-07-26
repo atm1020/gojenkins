@@ -57,7 +57,7 @@ type PipelineNode struct {
 	StartTime      int64 `json:"startTimeMillis"`
 	Duration       int64 `json:"durationMillis"`
 	StageFlowNodes []PipelineNode
-	ParentNodes    []int64
+	ParentNodes []string
 }
 
 // PipelineInputAction represents a pending input action that requires user interaction.
