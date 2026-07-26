@@ -17,6 +17,7 @@ package gojenkins
 import (
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -553,4 +554,27 @@ func TestJenkins_SafeRestart_Success(t *testing.T) {
 
 	err := jenkins.SafeRestart(context.Background())
 	assert.NoError(t, err)
+}
+
+func TestJenkins_JobRef_BuildsNestedBaseWithoutRequests(t *testing.T) {
+	var requests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+	}))
+	defer srv.Close()
+	jenkins := CreateJenkins(nil, srv.URL)
+
+	assert.Equal(t, "/job/top", jenkins.JobRef("top").Base)
+	assert.Equal(t, "/job/team/job/sub/job/leaf", jenkins.JobRef("leaf", "team", "sub").Base)
+	assert.Equal(t, 0, requests, "JobRef must not contact Jenkins")
+}
+
+func TestJenkins_JobRef_DoesNotWriteThroughParentIDs(t *testing.T) {
+	jenkins := CreateJenkins(nil, "http://jenkins")
+	parents := make([]string, 1, 2)
+	parents[0] = "team"
+
+	jenkins.JobRef("leaf", parents...)
+
+	assert.Equal(t, []string{"team"}, parents)
 }

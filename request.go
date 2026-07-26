@@ -292,7 +292,7 @@ func (r *Requester) ReadRawResponse(response *http.Response, responseStruct inte
 	if str, ok := responseStruct.(*string); ok {
 		*str = string(content)
 	} else {
-		return nil, fmt.Errorf("Could not cast responseStruct to *string")
+		return nil, errors.New("could not cast responseStruct to *string")
 	}
 
 	return response, nil
