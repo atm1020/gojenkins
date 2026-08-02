@@ -92,7 +92,7 @@ func (r *Requester) Post(ctx context.Context, endpoint string, payload io.Reader
 	}
 	ar.SetHeader("Content-Type", "application/x-www-form-urlencoded")
 	ar.Suffix = ""
-	return r.Do(ctx, ar, &responseStruct, querystring)
+	return r.Do(ctx, ar, responseStruct, querystring)
 }
 
 func (r *Requester) PostFiles(ctx context.Context, endpoint string, payload io.Reader, responseStruct interface{}, querystring map[string]string, files []string) (*http.Response, error) {

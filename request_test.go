@@ -16,8 +16,10 @@ package gojenkins
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -237,4 +239,76 @@ func TestRequester_Fields(t *testing.T) {
 	assert.Equal(t, "admin", requester.BasicAuth.Username)
 	assert.Equal(t, "password", requester.BasicAuth.Password)
 	assert.True(t, requester.SslVerify)
+}
+
+// newCrumbServer serves a valid crumb (SetCrumb runs before every POST) and
+// delegates everything else to h.
+func newCrumbServer(h http.HandlerFunc) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/crumbIssuer") {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"crumbRequestField":"Jenkins-Crumb","crumb":"abc"}`))
+			return
+		}
+		h(w, r)
+	}))
+}
+
+// Jenkins answers /replay/run with an HTML page (after following the 302).
+// A nil responseStruct must mean "don't parse the body" so that the HTML is
+// not fed to the JSON decoder.
+func TestRequester_Post_NilResponseStruct_DoesNotParseHTMLBody(t *testing.T) {
+	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body>Started</body></html>"))
+	})
+	defer srv.Close()
+
+	requester := CreateJenkins(nil, srv.URL).Requester
+	resp, err := requester.Post(context.Background(), "/job/pipe/1/replay/run", strings.NewReader("json=%7B%7D"), nil, nil)
+
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, 200, resp.StatusCode)
+}
+
+// Guard the other direction: a non-nil responseStruct must still be filled.
+func TestRequester_Post_ResponseStructIsPopulated(t *testing.T) {
+	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"pipe","color":"blue"}`))
+	})
+	defer srv.Close()
+
+	requester := CreateJenkins(nil, srv.URL).Requester
+	var result struct {
+		Name  string `json:"name"`
+		Color string `json:"color"`
+	}
+	_, err := requester.Post(context.Background(), "/job/pipe/doIt", nil, &result, nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "pipe", result.Name)
+	assert.Equal(t, "blue", result.Color)
+}
+
+// End-to-end regression for the replay popup: replay succeeded on the Jenkins
+// side but Replay reported "invalid character '<' looking for beginning of value".
+func TestPipelineRun_Replay_HTMLResponseIsNotAnError(t *testing.T) {
+	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/job/pipe/1/replay/run", r.URL.Path)
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><head><title>pipe</title></head></html>"))
+	})
+	defer srv.Close()
+
+	jenkins := CreateJenkins(nil, srv.URL)
+	job := &Job{Jenkins: jenkins, Raw: &JobResponse{Name: "pipe"}, Base: "/job/pipe"}
+	run := &PipelineRun{Job: job, Base: "/job/pipe/1", ID: "1"}
+
+	ok, err := run.Replay(context.Background(), map[string]string{"mainScript": "echo 'hi'"})
+
+	assert.NoError(t, err)
+	assert.True(t, ok)
 }
