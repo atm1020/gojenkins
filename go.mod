@@ -1,4 +1,4 @@
-module github.com/bndr/gojenkins
+module github.com/atm1020/gojenkins
 
 go 1.21
 
