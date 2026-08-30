@@ -54,6 +54,7 @@ type PipelineNode struct {
 	ID             string
 	Name           string
 	Status         string
+	ExecNode       string `json:"execNode"`
 	StartTime      int64 `json:"startTimeMillis"`
 	Duration       int64 `json:"durationMillis"`
 	StageFlowNodes []PipelineNode
