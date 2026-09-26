@@ -441,6 +441,78 @@ func TestParseBuildFormDetectsOmitValueField(t *testing.T) {
 	}
 }
 
+// activeChoicePage renders one plain ChoiceParameter the way uno-choice's
+// common/choiceParameterCommon.jelly does, with body as the markup inside its
+// parameter div, followed by a core boolean parameter.
+func activeChoicePage(body string) string {
+	return `<html><head></head><body><form>` +
+		`<div name="parameter" id="choice-parameter-1" class="active-choice">` +
+		`<input type="hidden" name="name" value="TARGETS" />` + body + `</div>` +
+		`<div name="parameter"><input name="name" type="hidden" value="DRY_RUN">` +
+		`<input name="value" checked="true" type="checkbox"></div>` +
+		`</form></body></html>`
+}
+
+func TestParseBuildFormReadsChoiceTypeAndFilter(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		multiple   bool
+		filterable bool
+		choices    []Choice
+	}{
+		{"single select", `<select name="value"><option value="a">A</option><option value="b" selected="selected">B</option></select>`,
+			false, false, []Choice{{Value: "a", Label: "A"}, {Value: "b", Label: "B", Selected: true}}},
+		{"multi select", `<select name="value" multiple="multiple" size="1"><option value="a">A</option></select>`,
+			true, false, []Choice{{Value: "a", Label: "A"}}},
+		{"checkbox", `<div class="dynamic_checkbox"><div class="jenkins-checkbox">` +
+			`<input json="a" name="value" value="a" type="checkbox" title="Alpha" alt="Alpha" checked="true" /><label>Alpha</label>` +
+			`</div><div class="jenkins-checkbox">` +
+			`<input disabled="true" json="b" name="value" value="b" type="checkbox" title="Beta" alt="Beta" /><label>Beta</label></div></div>`,
+			true, false, []Choice{{Value: "a", Label: "Alpha", Selected: true}, {Value: "b", Label: "Beta", Disabled: true}}},
+		{"radio", `<div class="ac-container"><div class="jenkins-radio">` +
+			`<input json="a" alt="Alpha" otherid="r1" name="TARGETS" value="a" type="radio" class="jenkins-radio__input" /><label>Alpha</label>` +
+			`<input json="a" name="value" value="a" type="hidden" id="r1" title="Alpha" /></div>` +
+			`<div class="jenkins-radio"><input json="b" alt="Beta" otherid="r2" checked="checked" name="TARGETS" value="b" type="radio" class="jenkins-radio__input" /><label>Beta</label>` +
+			`<input json="b" name="value" value="b" type="hidden" id="r2" title="Beta" /></div></div>`,
+			false, false, []Choice{{Value: "a", Label: "Alpha"}, {Value: "b", Label: "Beta", Selected: true}}},
+		{"filterable", `<select name="value"><option value="a">A</option></select>` +
+			`<input class='uno_choice_filter jenkins-input' type='text' value='' name='test' placeholder='Filter'/>`,
+			false, true, []Choice{{Value: "a", Label: "A"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			form, err := parseBuildForm(activeChoicePage(tt.body))
+			require.NoError(t, err)
+			require.Len(t, form.Parameters, 2)
+			p := form.Parameters[0]
+			assert.Equal(t, "ChoiceParameter", p.Type)
+			assert.Equal(t, tt.multiple, p.Multiple, "Multiple")
+			assert.Equal(t, tt.filterable, p.Filterable, "Filterable")
+			assert.Equal(t, tt.choices, p.Choices)
+
+			boolean := form.Parameters[1]
+			assert.False(t, boolean.Multiple, "a boolean's checkbox is not a multi-value choice")
+			assert.Empty(t, boolean.Choices)
+		})
+	}
+}
+
+func TestParseBuildFormKeepsCascadeChoiceTypeBeforeResolve(t *testing.T) {
+	page := referenceParameterPage("cascade-choice-parameter-data-holder",
+		`<select name="value" multiple="multiple"><option value="UNAVAILABLE">UNAVAILABLE</option></select>`+
+			`<input class='uno_choice_filter jenkins-input' type='text' name='test'/>`)
+	page = strings.Replace(page, `<div name="parameter" id="choice-parameter-1">`, `<div name="parameter" id="choice-parameter-1" class="active-choice">`, 1)
+
+	form, err := parseBuildForm(page)
+	require.NoError(t, err)
+	p := form.Parameters[0]
+	assert.Equal(t, "CascadeChoiceParameter", p.Type)
+	assert.True(t, p.Multiple)
+	assert.True(t, p.Filterable)
+	assert.Nil(t, p.Choices, "server-rendered fallback options are dropped until Resolve")
+}
+
 func TestParseBuildFormRejectsMissingParameters(t *testing.T) {
 	_, err := parseBuildForm("<html><body>not a build form</body></html>")
 	assert.ErrorIs(t, err, ErrUnsupportedForm)

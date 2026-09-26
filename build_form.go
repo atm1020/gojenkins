@@ -63,6 +63,16 @@ type FormParameter struct {
 	// and exactly the set that must be supplied to Resolve.
 	ReferencedParameters []string
 
+	// Multiple is set for an Active Choices parameter that accepts several
+	// values (uno-choice's PT_MULTI_SELECT and PT_CHECKBOX). Jenkins receives
+	// the selected values comma-joined. It is known before Resolve, from the
+	// control the form renders.
+	Multiple bool
+
+	// Filterable mirrors the plugin's filterable option: the form renders a
+	// filter box for the parameter. It is a display hint only.
+	Filterable bool
+
 	// OmitValueField is set for a DynamicReferenceParameter whose form has no
 	// value field: uno-choice's omitValueField option leaves out the hidden
 	// "value" input, so the browser submits nothing for it. Callers should
@@ -276,6 +286,22 @@ func readDataHolder(n *html.Node) (dataHolder, bool) {
 	}, true
 }
 
+// inputChoice reads a checkbox or radio option: its value, its label from
+// labelAttr, and its selected and disabled state from the element's attributes.
+func inputChoice(n *html.Node, labelAttr, selectedAttr string) Choice {
+	value := nodeAttr(n, "value")
+	label := nodeAttr(n, labelAttr)
+	if label == "" {
+		label = value
+	}
+	return Choice{
+		Value:    value,
+		Label:    label,
+		Selected: nodeHasAttr(n, selectedAttr),
+		Disabled: nodeHasAttr(n, "disabled"),
+	}
+}
+
 func (p *parsedParameter) applyDataHolder(h dataHolder) {
 	p.Name = h.name
 	p.ReferencedParameters = h.referenced
@@ -395,6 +421,18 @@ func parseParameterBody(root *html.Node) (parsedParameter, bool) {
 			case n.Data == "select" && nodeAttr(n, "name") == "value":
 				p.hasSelect = true
 				p.hasValue = true
+				p.Multiple = p.activeChoice && nodeHasAttr(n, "multiple")
+			case p.activeChoice && n.Data == "input" && nodeAttr(n, "type") == "checkbox" && nodeAttr(n, "name") == "value":
+				// PT_CHECKBOX: each option is a checkbox titled with its label.
+				p.hasValue = true
+				p.Multiple = true
+				p.Choices = append(p.Choices, inputChoice(n, "title", "checked"))
+			case p.activeChoice && n.Data == "input" && nodeAttr(n, "type") == "radio":
+				// PT_RADIO: the radio carries the label in alt; a hidden
+				// "value" input beside it is what the browser submits.
+				p.Choices = append(p.Choices, inputChoice(n, "alt", "checked"))
+			case n.Data == "input" && nodeHasClass(n, "uno_choice_filter"):
+				p.Filterable = true
 			case (n.Data == "input" || n.Data == "textarea") && nodeAttr(n, "name") == "value":
 				p.hasValue = true
 			case n.Data == "option":
