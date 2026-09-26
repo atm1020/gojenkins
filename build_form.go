@@ -63,6 +63,12 @@ type FormParameter struct {
 	// and exactly the set that must be supplied to Resolve.
 	ReferencedParameters []string
 
+	// OmitValueField is set for a DynamicReferenceParameter whose form has no
+	// value field: uno-choice's omitValueField option leaves out the hidden
+	// "value" input, so the browser submits nothing for it. Callers should
+	// leave such a parameter out of the build request.
+	OmitValueField bool
+
 	proxy   string // "/$stapler/bound/<uuid>"; empty unless bound
 	methods []string
 }
@@ -235,6 +241,7 @@ type parsedParameter struct {
 	FormParameter
 	activeChoice bool
 	hasSelect    bool
+	hasValue     bool   // the body has a form control named "value"
 	holderType   string // parameter type implied by its data-holder span, if any
 }
 
@@ -281,6 +288,7 @@ func (p *parsedParameter) decideType() {
 	case p.holderType != "":
 		p.Type = p.holderType
 		p.Choices = nil // server-rendered options on a bound parameter are fallback values
+		p.OmitValueField = p.Type == typeDynamicReferenceParameter && !p.hasValue
 	case p.activeChoice:
 		p.Type = typeChoiceParameter
 	case p.hasSelect:
@@ -386,6 +394,9 @@ func parseParameterBody(root *html.Node) (parsedParameter, bool) {
 				p.Name = nodeAttr(n, "value")
 			case n.Data == "select" && nodeAttr(n, "name") == "value":
 				p.hasSelect = true
+				p.hasValue = true
+			case (n.Data == "input" || n.Data == "textarea") && nodeAttr(n, "name") == "value":
+				p.hasValue = true
 			case n.Data == "option":
 				p.Choices = append(p.Choices, Choice{Value: nodeAttr(n, "value"), Label: textContent(n), Selected: nodeHasAttr(n, "selected"), Disabled: nodeHasAttr(n, "disabled")})
 			case n.Data == "script":

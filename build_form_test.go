@@ -402,6 +402,45 @@ func TestParseBuildFormKeepsUnsupportedActiveChoicesType(t *testing.T) {
 	assert.Equal(t, []string{"ENV"}, form.Parameters[1].ReferencedParameters)
 }
 
+// referenceParameterPage renders one DynamicReferenceParameter the way
+// uno-choice's DynamicReferenceParameter/index.jelly does, with body as the
+// markup inside its parameter div.
+func referenceParameterPage(holderClass, body string) string {
+	return `<html><head></head><body><form><div name="parameter" id="choice-parameter-1">` +
+		`<input type="hidden" name="name" value="SUMMARY" />` + body + `</div>` +
+		`<span class="` + holderClass + `" data-proxy-name="proxy_id1" data-referenced-parameters="ENV" ` +
+		`data-param-name="choice-parameter-1" data-name="SUMMARY"></span></form></body></html>`
+}
+
+func TestParseBuildFormDetectsOmitValueField(t *testing.T) {
+	const reference = "dynamic-reference-parameter-data-holder"
+	tests := []struct {
+		name   string
+		holder string
+		body   string
+		omit   bool
+	}{
+		{"formatted HTML with the hidden value input", reference,
+			`<div id="formattedHtml"><b>plan</b></div><input type="text" name="value" value="" class="jenkins-hidden" />`, false},
+		{"formatted HTML with omitValueField", reference,
+			`<div id="formattedHtml"><b>plan</b></div>`, true},
+		{"text box with omitValueField", reference,
+			`<input id="inputElement_x" type="text" value="note" readonly="readonly" disabled="disabled" class="jenkins-input"/>`, true},
+		{"script renders its own value input", reference,
+			`<div id="formattedHtml"><input type="text" name="value" value="custom" /></div>`, false},
+		{"cascade choice is never omitted", "cascade-choice-parameter-data-holder",
+			`<select name="value"><option value="a">a</option></select>`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			form, err := parseBuildForm(referenceParameterPage(tt.holder, tt.body))
+			require.NoError(t, err)
+			require.Len(t, form.Parameters, 1)
+			assert.Equal(t, tt.omit, form.Parameters[0].OmitValueField)
+		})
+	}
+}
+
 func TestParseBuildFormRejectsMissingParameters(t *testing.T) {
 	_, err := parseBuildForm("<html><body>not a build form</body></html>")
 	assert.ErrorIs(t, err, ErrUnsupportedForm)
