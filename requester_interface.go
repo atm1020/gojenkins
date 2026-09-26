@@ -17,8 +17,8 @@ package gojenkins
 import (
 	"context"
 	"io"
-	"os"
 	"net/http"
+	"os"
 )
 
 // JenkinsRequester defines the interface for making Jenkins API requests.
@@ -32,6 +32,7 @@ type JenkinsRequester interface {
 	Get(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
 	GetXML(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
 	SaveToFile(ctx context.Context, endpoint string, filepath string, querystring map[string]string) (*os.File, *http.Response, error)
+	Do(ctx context.Context, ar *APIRequest, response interface{}, options ...interface{}) (*http.Response, error)
 }
 
 // Ensure Requester implements JenkinsRequester

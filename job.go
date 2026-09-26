@@ -87,9 +87,10 @@ type ParameterDefinition struct {
 		Name  string      `json:"name"`
 		Value interface{} `json:"value"`
 	} `json:"defaultParameterValue"`
-	Description string `json:"description"`
-	Name        string `json:"name"`
-	Type        string `json:"type"`
+	Description string   `json:"description"`
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Choices     []string `json:"choices"`
 }
 
 // JobResponse represents the JSON response from the Jenkins API for a job.

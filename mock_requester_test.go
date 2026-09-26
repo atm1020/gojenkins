@@ -37,6 +37,7 @@ type MockRequester struct {
 	GetFunc        func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
 	GetXMLFunc     func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error)
 	SaveToFileFunc func(ctx context.Context, endpoint string, filepath string, querystring map[string]string) (*os.File, *http.Response, error)
+	DoFunc         func(ctx context.Context, ar *APIRequest, response interface{}, options ...interface{}) (*http.Response, error)
 }
 
 // GetJSON implements JenkinsRequester.
@@ -154,6 +155,21 @@ func (m *MockRequester) SaveToFile(ctx context.Context, endpoint string, filepat
 		return nil, nil, m.err
 	}
 	return nil, &http.Response{StatusCode: 200}, nil
+}
+
+// Do implements JenkinsRequester.
+func (m *MockRequester) Do(ctx context.Context, ar *APIRequest, response interface{}, options ...interface{}) (*http.Response, error) {
+	m.lastEndpoint = ar.Endpoint
+	if m.DoFunc != nil {
+		return m.DoFunc(ctx, ar, response, options...)
+	}
+	if m.err != nil {
+		return nil, m.err
+	}
+	if m.response != nil {
+		return m.response, nil
+	}
+	return &http.Response{StatusCode: http.StatusOK}, nil
 }
 
 // Ensure MockRequester implements JenkinsRequester
