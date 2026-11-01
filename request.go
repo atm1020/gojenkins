@@ -63,9 +63,20 @@ type Requester struct {
 	Logger    *log.Logger
 }
 
+// SetCrumb fetches a CSRF crumb and attaches it to ar. A transport failure is
+// returned so the caller reports it instead of dereferencing a nil response;
+// every Post* helper fails the write when this errors. A reachable server that
+// answers without a crumb is not an error: CSRF protection may be disabled, and
+// the write proceeds crumbless as before.
 func (r *Requester) SetCrumb(ctx context.Context, ar *APIRequest) error {
 	crumbData := map[string]string{}
-	response, _ := r.GetJSON(ctx, "/crumbIssuer/api/json", &crumbData, nil)
+	response, err := r.GetJSON(ctx, "/crumbIssuer/api/json", &crumbData, nil)
+	if err != nil {
+		return err
+	}
+	if response == nil {
+		return errors.New("crumb request returned no response")
+	}
 
 	if response.StatusCode == 200 && crumbData["crumbRequestField"] != "" {
 		ar.SetHeader(crumbData["crumbRequestField"], crumbData["crumb"])
