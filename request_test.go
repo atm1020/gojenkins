@@ -312,3 +312,96 @@ func TestPipelineRun_Replay_HTMLResponseIsNotAnError(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, ok)
 }
+
+// A transport failure on the crumb pre-flight used to be discarded, and the
+// nil *http.Response was then dereferenced for its StatusCode. Every Post*
+// helper runs SetCrumb first, so a build trigger panicked instead of
+// reporting an unreachable or untrusted server.
+func TestRequester_SetCrumb_TransportFailureIsReturnedNotPanicked(t *testing.T) {
+	// Close the listener so the port refuses connections.
+	down := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	downURL := down.URL
+	down.Close()
+
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer slow.Close()
+
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	cases := []struct {
+		name string
+		ctx  context.Context
+		base string
+	}{
+		{"connection refused", context.Background(), downURL},
+		{"dns failure", context.Background(), "http://gojenkins.invalid"},
+		{"context canceled", canceled, slow.URL},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			requester := CreateJenkins(nil, tc.base).Requester
+
+			assert.NotPanics(t, func() {
+				_, err := requester.Post(tc.ctx, "/job/pipe/build", nil, nil, nil)
+				assert.Error(t, err, "an unreachable server must fail the write")
+			})
+		})
+	}
+}
+
+// SetCrumb is also reached directly; it must surface the same error.
+func TestRequester_SetCrumb_ReturnsTransportError(t *testing.T) {
+	requester := CreateJenkins(nil, "http://gojenkins.invalid").Requester.(*Requester)
+	ar := NewAPIRequest("POST", "/job/pipe/build", nil)
+
+	var err error
+	assert.NotPanics(t, func() { err = requester.SetCrumb(context.Background(), ar) })
+	assert.Error(t, err)
+}
+
+// A reachable server with CSRF protection disabled answers the crumb endpoint
+// with a non-200 and no crumb. That is not a failure: the write must still go
+// out, just without crumb headers.
+func TestRequester_SetCrumb_MissingCrumbIssuerStillAllowsPost(t *testing.T) {
+	var gotCrumbHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/crumbIssuer") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		gotCrumbHeader = r.Header.Get("Jenkins-Crumb")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+
+	requester := CreateJenkins(nil, srv.URL).Requester
+	resp, err := requester.Post(context.Background(), "/job/pipe/build", nil, nil, nil)
+
+	if !assert.NoError(t, err) {
+		return
+	}
+	assert.Equal(t, 200, resp.StatusCode)
+	assert.Empty(t, gotCrumbHeader, "no crumb was issued, so none may be sent")
+}
+
+// The happy path must keep attaching the crumb header.
+func TestRequester_SetCrumb_AttachesCrumbHeader(t *testing.T) {
+	var gotCrumbHeader string
+	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+		gotCrumbHeader = r.Header.Get("Jenkins-Crumb")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	})
+	defer srv.Close()
+
+	requester := CreateJenkins(nil, srv.URL).Requester
+	_, err := requester.Post(context.Background(), "/job/pipe/build", nil, nil, nil)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "abc", gotCrumbHeader)
+}
