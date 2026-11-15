@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"net/http/httputil"
@@ -306,8 +307,16 @@ func (r *Requester) ReadRawResponse(response *http.Response, responseStruct inte
 func (r *Requester) ReadJSONResponse(response *http.Response, responseStruct interface{}) (*http.Response, error) {
 	defer func() { _ = response.Body.Close() }()
 
-	if err := json.NewDecoder(response.Body).Decode(responseStruct); err != nil && err != io.EOF {
-		return nil, err
+	decoder := json.NewDecoder(response.Body)
+	if err := decoder.Decode(responseStruct); err != nil && err != io.EOF {
+		mediaType, _, _ := mime.ParseMediaType(response.Header.Get("Content-Type"))
+		decodeErr := &ResponseDecodeError{
+			StatusCode:  response.StatusCode,
+			ContentType: mediaType,
+			Err:         err,
+		}
+		decodeErr.captureHTML(decoder, response.Body)
+		return response, decodeErr
 	}
 	return response, nil
 }
