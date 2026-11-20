@@ -703,7 +703,7 @@ func (j *Jenkins) globalSearchJSON(ctx context.Context, query string) (*SearchRe
 // Returns nil if CSRF protection is disabled (safe to ignore).
 func (j *Jenkins) getCrumbQueryParams(ctx context.Context) map[string]string {
 	crumbData := map[string]string{}
-	resp, err := j.Requester.GetJSON(ctx, "/crumbIssuer/api/json", &crumbData, nil)
+	resp, err := j.Requester.GetJSON(ctx, "/crumbIssuer", &crumbData, nil)
 	if err != nil || resp == nil || resp.StatusCode != 200 {
 		return nil
 	}

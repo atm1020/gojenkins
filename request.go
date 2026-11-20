@@ -71,8 +71,10 @@ type Requester struct {
 // the write proceeds crumbless as before.
 func (r *Requester) SetCrumb(ctx context.Context, ar *APIRequest) error {
 	crumbData := map[string]string{}
-	response, err := r.GetJSON(ctx, "/crumbIssuer/api/json", &crumbData, nil)
-	if err != nil {
+	response, err := r.GetJSON(ctx, "/crumbIssuer", &crumbData, nil)
+	// An unavailable issuer may return an HTML error page. Let Jenkins decide
+	// whether the write needs a crumb; API-token requests are exempt from CSRF.
+	if err != nil && (response == nil || response.StatusCode == http.StatusOK) {
 		return err
 	}
 	if response == nil {

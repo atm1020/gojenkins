@@ -243,11 +243,19 @@ func TestRequester_Fields(t *testing.T) {
 
 // newCrumbServer serves a valid crumb (SetCrumb runs before every POST) and
 // delegates everything else to h.
-func newCrumbServer(h http.HandlerFunc) *httptest.Server {
+func newCrumbServer(t *testing.T, h http.HandlerFunc) *httptest.Server {
+	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/crumbIssuer") {
+		if r.URL.Path == "/crumbIssuer/api/json" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"crumbRequestField":"Jenkins-Crumb","crumb":"abc"}`))
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/crumbIssuer") {
+			t.Errorf("crumb request path = %q, want /crumbIssuer/api/json", r.URL.Path)
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("<html><title>Not Found</title></html>"))
 			return
 		}
 		h(w, r)
@@ -258,7 +266,7 @@ func newCrumbServer(h http.HandlerFunc) *httptest.Server {
 // A nil responseStruct must mean "don't parse the body" so that the HTML is
 // not fed to the JSON decoder.
 func TestRequester_Post_NilResponseStruct_DoesNotParseHTMLBody(t *testing.T) {
-	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+	srv := newCrumbServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html><body>Started</body></html>"))
 	})
@@ -275,7 +283,7 @@ func TestRequester_Post_NilResponseStruct_DoesNotParseHTMLBody(t *testing.T) {
 
 // Guard the other direction: a non-nil responseStruct must still be filled.
 func TestRequester_Post_ResponseStructIsPopulated(t *testing.T) {
-	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+	srv := newCrumbServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"name":"pipe","color":"blue"}`))
 	})
@@ -296,7 +304,7 @@ func TestRequester_Post_ResponseStructIsPopulated(t *testing.T) {
 // End-to-end regression for the replay popup: replay succeeded on the Jenkins
 // side but Replay reported "invalid character '<' looking for beginning of value".
 func TestPipelineRun_Replay_HTMLResponseIsNotAnError(t *testing.T) {
-	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+	srv := newCrumbServer(t, func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/job/pipe/1/replay/run", r.URL.Path)
 		w.Header().Set("Content-Type", "text/html")
 		_, _ = w.Write([]byte("<html><head><title>pipe</title></head></html>"))
@@ -369,8 +377,10 @@ func TestRequester_SetCrumb_ReturnsTransportError(t *testing.T) {
 func TestRequester_SetCrumb_MissingCrumbIssuerStillAllowsPost(t *testing.T) {
 	var gotCrumbHeader string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/crumbIssuer") {
+		if r.URL.Path == "/crumbIssuer/api/json" {
+			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte("<html><title>Not Found</title></html>"))
 			return
 		}
 		gotCrumbHeader = r.Header.Get("Jenkins-Crumb")
@@ -392,7 +402,7 @@ func TestRequester_SetCrumb_MissingCrumbIssuerStillAllowsPost(t *testing.T) {
 // The happy path must keep attaching the crumb header.
 func TestRequester_SetCrumb_AttachesCrumbHeader(t *testing.T) {
 	var gotCrumbHeader string
-	srv := newCrumbServer(func(w http.ResponseWriter, r *http.Request) {
+	srv := newCrumbServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotCrumbHeader = r.Header.Get("Jenkins-Crumb")
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{}`))

@@ -133,7 +133,7 @@ func TestGlobalSearchLegacy_CrumbPassedAsQueryParam(t *testing.T) {
 	jenkins.Version = "2.400"
 
 	jenkins.Requester.(*MockRequester).GetJSONFunc = func(ctx context.Context, endpoint string, response interface{}, query map[string]string) (*http.Response, error) {
-		if endpoint == "/crumbIssuer/api/json" {
+		if endpoint == "/crumbIssuer" {
 			if m, ok := response.(*map[string]string); ok {
 				*m = map[string]string{
 					"crumbRequestField": "Jenkins-Crumb",
